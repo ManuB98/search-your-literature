@@ -1,0 +1,9 @@
+# Ignore the folder containing the PDFs
+raw-literature/
+
+# Ignore the Parquet database and any CSV backups
+*.parquet
+*.csv
+
+# Ignore R environment file 
+.Renviron
