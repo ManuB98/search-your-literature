@@ -13,7 +13,6 @@ ui <- fluidPage(
       # 1. Text Search with Boolean Help
       textInput("query", "Search in Text:", placeholder = "e.g. decoding|phonics"),
       
-      # The Boolean Explanation you liked
       helpText("Boolean Tips:"),
       tags$ul(style = "font-size: 11px; color: #555;",
         tags$li(tags$b("|"), " for OR (e.g., 'decoding|phonics')"),
@@ -22,13 +21,14 @@ ui <- fluidPage(
       ),
       hr(),
       
-      # 2. Tag Filter
+      # 2. Tag Filter & Exclude Toggle
       uiOutput("tag_filter_ui"),
+      checkboxInput("exclude_tag", "Exclude this tag instead", value = FALSE),
       
       actionButton("search_btn", "Apply Filters", class = "btn-primary", width = "100%"),
       hr(),
       uiOutput("result_count"),
-      helpText("Note: After saving a new tag, click 'Apply Filters' to refresh the tag list.")
+      helpText("Note: Use the 'Exclude' checkbox to hide short fragments or non-DOI text.")
     ),
     
     mainPanel(
@@ -52,6 +52,7 @@ server <- function(input, output, session) {
     if(!file.exists(vault_path)) return(data.frame())
     d <- read_parquet(vault_path)
     if (!"tags" %in% names(d)) d$tags <- ""
+    # Ensure row_id is consistent
     d <- d %>% mutate(row_id = row_number()) 
     d
   })
@@ -65,7 +66,7 @@ server <- function(input, output, session) {
       str_split(",\\s*") %>% 
       unlist() %>% 
       unique() %>% 
-      setdiff("") %>%
+      setdiff(c("", NA)) %>%
       sort()
     
     selectInput("filter_tag", "Filter by Tag:", 
@@ -73,7 +74,7 @@ server <- function(input, output, session) {
                 selected = input$filter_tag)
   })
   
-  # Combined Filter Logic
+  # Combined Filter Logic (Including the new Exclude function)
   observeEvent(input$search_btn, {
     res <- val$db
     
@@ -82,9 +83,15 @@ server <- function(input, output, session) {
       res <- res %>% filter(str_detect(text, regex(input$query, ignore_case = TRUE)))
     }
     
-    # Filter by Tag
+    # Filter by Tag (Include or Exclude)
     if(!is.null(input$filter_tag) && input$filter_tag != "") {
-      res <- res %>% filter(str_detect(tags, fixed(input$filter_tag)))
+      if (input$exclude_tag) {
+        # Keep rows that DO NOT contain the tag
+        res <- res %>% filter(!str_detect(tags, fixed(input$filter_tag)))
+      } else {
+        # Keep rows that DO contain the tag
+        res <- res %>% filter(str_detect(tags, fixed(input$filter_tag)))
+      }
     }
     
     current_view(res)
@@ -101,10 +108,11 @@ server <- function(input, output, session) {
       observeEvent(input[[save_id]], {
         new_tag_val <- input[[paste0("tag_", id)]]
         row_idx <- which(val$db$row_id == id)
+        
         val$db$tags[row_idx] <<- new_tag_val
         
         write_parquet(val$db, vault_path)
-        showNotification("Tag saved!", type = "message", duration = 2)
+        showNotification("Tag saved and database updated!", type = "message", duration = 2)
       }, ignoreInit = TRUE)
     })
   })
@@ -117,7 +125,7 @@ server <- function(input, output, session) {
     data <- current_view()
     if (nrow(data) == 0) return(p("No results match your filters."))
     
-    # Rendering limit for performance
+    # Rendering limit for performance (Top 100)
     display_data <- head(data, 100)
     
     lapply(1:nrow(display_data), function(i) {
