@@ -45,6 +45,24 @@ ui <- fluidPage(
           .filter-status { padding: 10px; border-radius: 5px; font-size: 12px; line-height: 1.4; }
           .status-active { background-color: #e7f3fe; border: 1px solid #b6d4fe; color: #084298; }
           .status-exclude { background-color: #f8d7da; border: 1px solid #f5c2c7; color: #842029; }
+          
+          /* Styles for the Reader View Modal */
+          .printable-content { 
+            max-width: 800px; 
+            margin: 20px auto; 
+            font-family: 'Georgia', serif; 
+            line-height: 1.8; 
+            font-size: 20px; 
+            color: #1a1a1a;
+          }
+          .print-source { 
+            font-size: 14px;
+            font-style: italic; 
+            color: #666; 
+            border-bottom: 1px solid #eee; 
+            padding-bottom: 10px; 
+            margin-bottom: 20px; 
+          }
         "))
       ),
       uiOutput("paragraphs_ui")
@@ -99,32 +117,24 @@ server <- function(input, output, session) {
     )
   })
 
-  # 2. IMPROVED MULTI-TAG FILTER LOGIC
+  # 2. FILTER LOGIC
   observeEvent(input$search_btn, {
     res <- val$db
-    
-    # Text search
     if(nchar(input$query) > 0) {
       res <- res %>% filter(str_detect(text, regex(input$query, ignore_case = TRUE)))
     }
-    
-    # Multi-tag handling using regex pattern
     if(!is.null(input$filter_tag) && length(input$filter_tag) > 0) {
-      # Creates pattern like "short|doi|long"
       tag_pattern <- paste(input$filter_tag, collapse = "|")
-      
       if (input$exclude_tag) {
-        # Hide rows containing ANY of the selected tags
         res <- res %>% filter(!str_detect(tags, regex(tag_pattern, ignore_case = TRUE)))
       } else {
-        # Show rows containing ANY of the selected tags
         res <- res %>% filter(str_detect(tags, regex(tag_pattern, ignore_case = TRUE)))
       }
     }
     current_view(res)
   }, ignoreNULL = FALSE)
 
-  # 3. UI RENDERING (Capped at 50)
+  # 3. UI RENDERING (With Reader View Button)
   output$paragraphs_ui <- renderUI({
     data <- current_view()
     if (nrow(data) == 0) return(p("No results match your filters."))
@@ -137,31 +147,68 @@ server <- function(input, output, session) {
           div(class = "para-text", display_data$text[i]),
           div(class = "tag-input-area",
               fluidRow(
-                column(9, textInput(paste0("tag_", this_id), NULL, 
+                column(7, textInput(paste0("tag_", this_id), NULL, 
                                     value = display_data$tags[i], 
                                     placeholder = "Enter tags...")),
-                column(3, actionButton(paste0("save_", this_id), "Save", 
-                                       class = "btn-success btn-sm", width = "100%"))
+                column(5, 
+                       actionButton(paste0("save_", this_id), "Save", 
+                                    class = "btn-success btn-sm", width = "48%"),
+                       actionButton(paste0("read_", this_id), "Reader", 
+                                    class = "btn-info btn-sm", width = "48%"))
               )
           )
       )
     })
   })
 
-  # 4. TARGETED SAVE LOGIC
+  # 4. SAVE & READER VIEW OBSERVERS
   observe({
     visible_data <- head(current_view(), 50)
     if(nrow(visible_data) == 0) return()
+    
     lapply(visible_data$row_id, function(id) {
-      save_id <- paste0("save_", id)
-      observeEvent(input[[save_id]], {
+      # Save Logic
+      observeEvent(input[[paste0("save_", id)]], {
         new_tag_val <- input[[paste0("tag_", id)]]
         row_idx <- which(val$db$row_id == id)
-        
         val$db$tags[row_idx] <<- new_tag_val
         write_parquet(val$db, vault_path)
         showNotification("Tag saved!", type = "message", duration = 2)
       }, ignoreInit = TRUE, once = TRUE)
+      
+      # Reader View Logic
+      observeEvent(input[[paste0("read_", id)]], {
+        row_data <- val$db[val$db$row_id == id, ]
+        
+        showModal(modalDialog(
+          title = "Clean View for reMarkable",
+          size = "l",
+          easyClose = TRUE,
+          
+          div(id = paste0("print_content_", id), class = "printable-content",
+              div(class = "print-source", 
+                  paste0("Source: ", row_data$source_file, " | Page: ", row_data$page)),
+              p(row_data$text)
+          ),
+          
+          footer = tagList(
+            modalButton("Close"),
+            # JavaScript to open a new tab with ONLY the text for the extension to grab
+            actionButton("do_print", "Open Clean Tab", class = "btn-primary", 
+                         onclick = sprintf("
+                var content = document.getElementById('print_content_%s').innerHTML;
+                var metaText = 'Quote from %s (Pg %s)';
+                var win = window.open('', '_blank');
+                win.document.write('<html><head><title>' + metaText + '</title>');
+                win.document.write('<style>body{font-family:serif; line-height:1.8; max-width:700px; margin:50px auto; font-size:18px;}</style>');
+                win.document.write('</head><body>');
+                win.document.write(content);
+                win.document.write('</body></html>');
+                win.document.close();
+             ", id, row_data$source_file, row_data$page))
+          )
+        ))
+      }, ignoreInit = TRUE)
     })
   })
   
