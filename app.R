@@ -28,7 +28,7 @@ ui <- fluidPage(
       actionButton("search_btn", "Apply Filters", class = "btn-primary", width = "100%"),
       hr(),
       uiOutput("result_count"),
-      helpText("Note: Use the 'Exclude' checkbox to hide short fragments or non-DOI text.")
+      helpText("Note: Rendering is capped at the top 50 results for speed.")
     ),
     
     mainPanel(
@@ -47,20 +47,23 @@ ui <- fluidPage(
 
 server <- function(input, output, session) {
   
-  # Reactive database loader
+  # 1. LOAD DATABASE INTO RAM (Once at startup)
   val <- reactiveValues(db = {
     if(!file.exists(vault_path)) return(data.frame())
+    showNotification("Loading 190k rows into memory...", type = "message", duration = NULL, id = "load_msg")
     d <- read_parquet(vault_path)
+    removeNotification("load_msg")
+    
     if (!"tags" %in% names(d)) d$tags <- ""
-    # Ensure row_id is consistent
+    # Ensure stable row IDs for saving
     d <- d %>% mutate(row_id = row_number()) 
     d
   })
   
-  # Reactive for currently displayed results
+  # Reactive for currently filtered results
   current_view <- reactiveVal(data.frame())
   
-  # Generate Tag Filter Choices
+  # Generate Tag Filter Choices dynamically
   output$tag_filter_ui <- renderUI({
     available_tags <- val$db$tags %>% 
       str_split(",\\s*") %>% 
@@ -74,22 +77,20 @@ server <- function(input, output, session) {
                 selected = input$filter_tag)
   })
   
-  # Combined Filter Logic (Including the new Exclude function)
+  # 2. FAST FILTERING LOGIC
   observeEvent(input$search_btn, {
     res <- val$db
     
-    # Filter by Text (Boolean/Regex)
+    # Filter by Text (Regex)
     if(nchar(input$query) > 0) {
       res <- res %>% filter(str_detect(text, regex(input$query, ignore_case = TRUE)))
     }
     
-    # Filter by Tag (Include or Exclude)
+    # Filter by Tag
     if(!is.null(input$filter_tag) && input$filter_tag != "") {
       if (input$exclude_tag) {
-        # Keep rows that DO NOT contain the tag
         res <- res %>% filter(!str_detect(tags, fixed(input$filter_tag)))
       } else {
-        # Keep rows that DO contain the tag
         res <- res %>% filter(str_detect(tags, fixed(input$filter_tag)))
       }
     }
@@ -97,36 +98,41 @@ server <- function(input, output, session) {
     current_view(res)
   }, ignoreNULL = FALSE)
 
-  # Save Tag Logic
+  # 3. SELECTIVE SAVE LOGIC (Only observes the 50 visible items)
   observe({
-    results_df <- current_view()
-    if(nrow(results_df) == 0) return()
+    # Limit observers to only the visible rows to prevent memory leaks
+    visible_data <- head(current_view(), 50)
+    if(nrow(visible_data) == 0) return()
     
-    lapply(results_df$row_id, function(id) {
+    lapply(visible_data$row_id, function(id) {
       save_id <- paste0("save_", id)
       
       observeEvent(input[[save_id]], {
         new_tag_val <- input[[paste0("tag_", id)]]
         row_idx <- which(val$db$row_id == id)
         
+        # Update RAM
         val$db$tags[row_idx] <<- new_tag_val
         
+        # Update Disk
         write_parquet(val$db, vault_path)
-        showNotification("Tag saved and database updated!", type = "message", duration = 2)
-      }, ignoreInit = TRUE)
+        showNotification("Tag saved!", type = "message", duration = 2)
+      }, ignoreInit = TRUE, once = TRUE) # 'once' helps with performance
     })
   })
   
   output$result_count <- renderUI({
-    tags$b(paste("Displaying", nrow(current_view()), "paragraphs"))
+    n_total <- nrow(current_view())
+    tags$b(paste("Found", n_total, "paragraphs (Showing top 50)"))
   })
   
+  # 4. FAST UI RENDERING
   output$paragraphs_ui <- renderUI({
     data <- current_view()
     if (nrow(data) == 0) return(p("No results match your filters."))
     
-    # Rendering limit for performance (Top 100)
-    display_data <- head(data, 100)
+    # LIMIT: Only render top 50 cards to keep the browser responsive
+    display_data <- head(data, 50)
     
     lapply(1:nrow(display_data), function(i) {
       this_id <- display_data$row_id[i]
@@ -140,7 +146,7 @@ server <- function(input, output, session) {
               fluidRow(
                 column(9, textInput(paste0("tag_", this_id), label = NULL, 
                                     value = display_data$tags[i], 
-                                    placeholder = "Enter tags (comma separated)")),
+                                    placeholder = "Enter tags...")),
                 column(3, actionButton(paste0("save_", this_id), "Save", 
                                        class = "btn-success btn-sm", width = "100%"))
               )
