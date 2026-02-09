@@ -1,28 +1,31 @@
 # search-your-literature
 
-This project converts either all your PDFs or the PDFs of your choice to raw text stored in a parquet file that you can open in Positron. 
+This project converts either all your PDFs or the PDFs of your choice into raw text stored in a **Parquet** file, which can be viewed and queried directly in Positron.
 
-It also includes a shiny app that you can use to then search through your literature and add tags manually. 
+It includes a **Shiny app** for searching through your literature using Boolean operators and adding research tags manually. Additionally, it features an **Auto-Tagger script** that automatically categorizes text paragraphs based on their length (short, middle, or long) and identifies the presence of a DOI. You can easily modify this script to add other automatic tags as needed.
 
-Lastly, it includes an auto-tagger script that adds atomatic tags to you text paragraphs, depending on the lenght and if a doi is present. You could modify this script to add other automatic tags as well.
+---
 
-HOW TO USE:
+### HOW TO USE:
 
-For this to work, you will need to create a Mistral API-key from the Mistral Website to convert PDFs to text with the help of AI. You should add this API Key to your .Renviron file under MISTRAL_API_KEY='your_key_here'. 
+1. **Mistral API Key:** You will need to generate an API key from the [Mistral Website](https://mistral.ai/) to convert PDFs into text. Add this key to your `.Renviron` file as follows:
+`MISTRAL_API_KEY='your_key_here'`
+2. **Input Directory:** Modify the `input_dir` variable in `convert_literature.R` (line 10) to point to the folder containing your literature PDFs.
+3. **Required Packages:** Ensure you have the following R packages installed:
 
-You will also need to modify the input_dir in convert_literature.R (line 10) to the folder where you have saved all your literature PDFs.
-
-Finally, make sure to have all these R-packages installed: 
-
-install.packages(c(
-  "httr2",    # API communication with Mistral
-  "arrow",    # High-performance Parquet database handling
-  "dplyr",    # Data manipulation and filtering
-  "stringr",  # Advanced text searching and regex
-  "shiny",    # The interactive search & tagging app
-  "purrr",    # Functional programming for file loops
-  "here",     # Robust file path management
-  "dotenv",   # Managing the MISTRAL_API_KEY
-  "pdftools", # Local PDF text extraction (backup/metadata)
-  "curl"      # Handing file uploads to the API
+```r
+install.packages(c( 
+  "httr2",    # API communication with Mistral 
+  "arrow",    # High-performance Parquet database handling 
+  "dplyr",    # Data manipulation and filtering 
+  "stringr",  # Advanced text searching and regex 
+  "shiny",    # The interactive search & tagging app 
+  "purrr",    # Functional programming for file loops 
+  "here",     # Robust file path management 
+  "dotenv",   # Managing the MISTRAL_API_KEY 
+  "pdftools", # Local PDF text extraction 
+  "curl"      # Handling file uploads to the API 
 ))
+
+```
+
