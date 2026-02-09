@@ -86,7 +86,7 @@ for (i in rows_to_process) {
 
   if (count %% 30 == 0) {
   write_parquet(db, vault_path)
-  cat("☕ Taking a 30-second cooling break...\n")
+  cat("☕ Taking a 90-second cooling break...\n")
   Sys.sleep(90) 
 }
   }
