@@ -6,57 +6,51 @@ library(stringr)
 # Path to your parquet file
 vault_path <- "raw-literature/literature_vault.parquet"
 
+# --- DATA PRE-PROCESSING (Run once before app starts) ---
+if (file.exists(vault_path)) {
+  temp_df <- read_parquet(vault_path)
+  
+  # Ensure columns exist
+  if (!"tags" %in% names(temp_df)) temp_df$tags <- ""
+  if (!"row_id" %in% names(temp_df)) temp_df$row_id <- seq_len(nrow(temp_df))
+  
+  # Inject ID into text field if it hasn't been done yet
+  # Using a more robust check to prevent double injection
+  needs_id <- !grepl("^\\[ID:", temp_df$text)
+  if (any(needs_id)) {
+    temp_df$text[needs_id] <- paste0("[ID: ", temp_df$row_id[needs_id], "] ", temp_df$text[needs_id])
+    write_parquet(temp_df, vault_path)
+  }
+  rm(temp_df) # Clean up memory
+}
+
 ui <- fluidPage(
   titlePanel("Literature Vault: Search & Tagging"),
   tags$head(
     tags$style(HTML("
-      /* UI Styling for the Browser */
-      .para-card { border: 1px solid #ddd; padding: 20px; margin-bottom: 30px; background-color: #fff; border-radius: 8px; box-shadow: 2px 2px 5px rgba(0,0,0,0.05); }
+      /* UI Styling */
+      .para-card { border: 1px solid #ddd; padding: 20px; margin-bottom: 30px; background-color: #fff; border-radius: 8px; }
       .para-text { font-size: 18px; line-height: 1.6; color: #2c3e50; margin-bottom: 15px; }
       .meta-info { font-size: 12px; color: #7f8c8d; font-family: monospace; margin-bottom: 10px; }
       
-      /* PRINT LOGIC */
       @media print {
-        @page { 
-          margin: 1.5cm; 
-        }
-
-        /* 1. Force every card to start on its own page and occupy the full height */
+        @page { margin: 1.5cm; }
         .para-card { 
           display: block !important;
           page-break-before: always !important; 
           break-before: page !important;
+          min-height: 95vh !important; 
           border: none !important;
           box-shadow: none !important;
-          /* Occupies the full page so even short chunks don't share space */
-          min-height: 95vh !important; 
-          margin: 0 !important;
-          padding: 0 !important;
         }
-
-        /* 2. Force the second (empty) page after every card */
         .para-card::after {
-          content: '\\00a0'; /* Non-breaking space */
+          content: '\\00a0';
           display: block;
           page-break-before: always !important;
           break-before: page !important;
-          visibility: hidden;
         }
-
-        /* 3. Hide all app controls and buttons */
-        .btn, .sidebar, #main_tabs > li, .nav-tabs, hr, .filter-status, 
-        .control-label, .titlePanel, #result_summary, .tag-input-row, .shiny-notification-wrapper { 
-          display: none !important; 
-        }
-        
-        /* 4. Formatting for the printed text */
-        .para-text { 
-          font-size: 16pt !important; 
-          color: black !important; 
-          line-height: 1.5;
-          page-break-inside: avoid !important;
-        }
-        .meta-info { font-size: 10pt !important; border-bottom: 1px solid #eee; padding-bottom: 5px; }
+        .btn, .nav-tabs, hr, .titlePanel, #result_summary, .tag-input-row { display: none !important; }
+        .para-text { font-size: 16pt !important; color: black !important; line-height: 1.5; }
       }
     "))
   ),
@@ -91,33 +85,20 @@ ui <- fluidPage(
 
 server <- function(input, output, session) {
   
-  # 1. DATA LOADING & ID INJECTION
+  # Load data into reactiveValues AFTER the pre-processing check above
   val <- reactiveValues(db = {
-    if(!file.exists(vault_path)) return(data.frame())
-    d <- read_parquet(vault_path)
-    
-    # Ensure columns exist
-    if (!"tags" %in% names(d)) d$tags <- ""
-    if (!"row_id" %in% names(d)) d$row_id <- seq_len(nrow(d))
-    
-    # Inject ID into text field if it hasn't been done yet
-    d$text <- ifelse(grepl("^\\[ID:", d$text), 
-                     d$text, 
-                     paste0("[ID: ", d$row_id, "] ", d$text))
-    
-    write_parquet(d, vault_path)
-    d
+    if(!file.exists(vault_path)) data.frame() else read_parquet(vault_path)
   })
   
   current_view <- reactiveVal(data.frame()) 
   
   output$tag_filter_ui <- renderUI({
+    req(val$db)
     available_tags <- val$db$tags %>% str_split(",\\s*") %>% unlist() %>% 
       unique() %>% setdiff(c("", NA)) %>% sort()
     selectizeInput("filter_tag", "Filter by Tag(s):", choices = available_tags, multiple = TRUE)
   })
 
-  # 2. FILTER LOGIC
   observeEvent(input$search_btn, {
     res <- val$db
     if(nchar(input$query) > 0) {
@@ -130,26 +111,22 @@ server <- function(input, output, session) {
     }
     current_view(res)
     updateTabsetPanel(session, "main_tabs", selected = "Literature Results")
-  }, ignoreNULL = FALSE)
+  })
 
-  # 3. UI RENDERING
   output$paragraphs_ui <- renderUI({
     data <- current_view()
-    if (is.null(data) || nrow(data) == 0) return(p("No results found. Please use the search tab."))
+    if (nrow(data) == 0) return(p("No results found."))
     
-    # Limit display to 50 for performance
     display_data <- head(data, 50)
 
     lapply(1:nrow(display_data), function(i) {
       this_id <- display_data$row_id[i]
-      
       div(class = "para-card",
           div(class = "meta-info", paste0(display_data$source_file[i], " | Page ", display_data$page[i])),
           div(class = "para-text", display_data$text[i]),
-          # Tag Input Row: Visible in App for editing, hidden on paper
           div(class = "tag-input-row",
               fluidRow(
-                column(8, textInput(paste0("tag_", this_id), "Edit Tags:", value = display_data$tags[i])),
+                column(8, textInput(paste0("tag_", this_id), "Tags:", value = display_data$tags[i])),
                 column(4, style = "margin-top: 25px;", actionButton(paste0("save_", this_id), "Save", class = "btn-success", width = "100%"))
               )
           )
@@ -157,7 +134,7 @@ server <- function(input, output, session) {
     })
   })
 
-  # 4. SAVE LOGIC
+  # Handle Saving
   observe({
     data <- head(current_view(), 50)
     if(nrow(data) == 0) return()
@@ -167,14 +144,13 @@ server <- function(input, output, session) {
         row_idx <- which(val$db$row_id == id)
         val$db$tags[row_idx] <<- input[[paste0("tag_", id)]]
         write_parquet(val$db, vault_path)
-        showNotification(paste("ID", id, "tags updated."), type = "message")
+        showNotification(paste("ID", id, "saved."))
       }, ignoreInit = TRUE)
     })
   })
 
   output$result_summary <- renderUI({
-    data <- current_view()
-    if(nrow(data) > 0) tags$h4(paste("Showing top 50 of", nrow(data), "results found"))
+    tags$h4(paste("Showing", nrow(head(current_view(), 50)), "of", nrow(current_view()), "results"))
   })
 }
 
