@@ -5,6 +5,7 @@ library(dotenv)
 library(here)
 library(arrow)   
 library(dplyr)   
+library(data.table) # Added for rleid support
 
 api_key <- Sys.getenv("MISTRAL_API_KEY")
 input_dir <- "/Users/manuelbruns/Documents/Literatur"
@@ -143,8 +144,21 @@ main <- function() {
     all_new_data <- bind_rows(new_data_list)
     all_new_data$links_to <- as.character(all_new_data$links_to)
     
+    # --- CONCATENATION LOGIC ---
+    message("🔗 Concatenating consecutive notes...")
+    all_new_data <- all_new_data %>%
+      group_by(source_file) %>%
+      mutate(run_id = data.table::rleid(links_to)) %>%
+      group_by(source_file, run_id, links_to) %>%
+      summarise(
+        page = first(page),
+        para_idx = first(para_idx),
+        text = paste(text, collapse = " "),
+        .groups = "drop"
+      ) %>%
+      select(-run_id)
+    
     # --- ROW_ID ASSIGNMENT ---
-    # Find the current maximum ID to continue the sequence
     start_id <- if(nrow(existing_vault) > 0) max(existing_vault$row_id, na.rm = TRUE) else 0
     all_new_data$row_id <- seq(from = start_id + 1, length.out = nrow(all_new_data))
     

@@ -6,22 +6,19 @@ library(stringr)
 # Path to your parquet file
 vault_path <- "raw-literature/literature_vault.parquet"
 
-# --- DATA PRE-PROCESSING (Run once before app starts) ---
+# --- DATA PRE-PROCESSING ---
 if (file.exists(vault_path)) {
   temp_df <- read_parquet(vault_path)
   
-  # Ensure columns exist
   if (!"tags" %in% names(temp_df)) temp_df$tags <- ""
   if (!"row_id" %in% names(temp_df)) temp_df$row_id <- seq_len(nrow(temp_df))
   
-  # Inject ID into text field if it hasn't been done yet
-  # Using a more robust check to prevent double injection
   needs_id <- !grepl("^\\[ID:", temp_df$text)
   if (any(needs_id)) {
     temp_df$text[needs_id] <- paste0("[ID: ", temp_df$row_id[needs_id], "] ", temp_df$text[needs_id])
     write_parquet(temp_df, vault_path)
   }
-  rm(temp_df) # Clean up memory
+  rm(temp_df)
 }
 
 ui <- fluidPage(
@@ -63,6 +60,7 @@ ui <- fluidPage(
           wellPanel(
             textInput("query", "Search in Text:", placeholder = "e.g. AI.*black box"),
             uiOutput("tag_filter_ui"),
+            uiOutput("source_filter_ui"), # Added the source filter you requested
             checkboxInput("exclude_tag", "Exclude selected tags instead", value = FALSE),
             actionButton("search_btn", "Apply Filters & View Results", class = "btn-primary btn-lg", width = "100%")
           )
@@ -85,7 +83,6 @@ ui <- fluidPage(
 
 server <- function(input, output, session) {
   
-  # Load data into reactiveValues AFTER the pre-processing check above
   val <- reactiveValues(db = {
     if(!file.exists(vault_path)) data.frame() else read_parquet(vault_path)
   })
@@ -99,6 +96,13 @@ server <- function(input, output, session) {
     selectizeInput("filter_tag", "Filter by Tag(s):", choices = available_tags, multiple = TRUE)
   })
 
+  # Added the UI for source_file filter
+  output$source_filter_ui <- renderUI({
+    req(val$db)
+    available_sources <- sort(unique(val$db$source_file))
+    selectizeInput("filter_source", "Filter by Source File:", choices = available_sources, multiple = TRUE)
+  })
+
   observeEvent(input$search_btn, {
     res <- val$db
     if(nchar(input$query) > 0) {
@@ -109,6 +113,11 @@ server <- function(input, output, session) {
       if (input$exclude_tag) res <- res %>% filter(!str_detect(tags, tag_pattern))
       else res <- res %>% filter(str_detect(tags, tag_pattern))
     }
+    # Added source_file filtering logic
+    if(!is.null(input$filter_source) && length(input$filter_source) > 0) {
+      res <- res %>% filter(source_file %in% input$filter_source)
+    }
+    
     current_view(res)
     updateTabsetPanel(session, "main_tabs", selected = "Literature Results")
   })
@@ -134,7 +143,6 @@ server <- function(input, output, session) {
     })
   })
 
-  # Handle Saving
   observe({
     data <- head(current_view(), 50)
     if(nrow(data) == 0) return()
