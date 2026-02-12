@@ -24,7 +24,7 @@ install.packages(c(
   "here",     # Robust file path management 
   "dotenv",   # Managing the MISTRAL_API_KEY 
   "pdftools", # Local PDF text extraction 
-  "curl"      # Handling file uploads to the API 
+  "curl",      # Handling file uploads to the API 
   "pbapply"
 ))
 
